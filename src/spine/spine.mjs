@@ -119,9 +119,9 @@ const AMBIENT_OPEN_MS = 10_000;
 // A turn that never opens its ⏳ and posts its reply whole at finish: a quiet one, and every one with
 // the emoji train (dispatch.thinking_train, operator 2026-11-03).
 const whole = (d) => !!(d.quiet || d.emoji);
-// …except an emoji turn's first tool use opens it, as an ambient bubble turn's does (operator 2026-11-04). A bot's line or a
-// tunnel is not opened by a bare tool use. Any turn's first real text opens it, under the final reply's gate (operator 2026-11-11).
-const opensOnTool = (d) => !!d.emoji && !d.tunnel && (!d.quiet || !!d.unaddressed);
+// …except an emoji turn's first tool use opens it, as an ambient bubble turn's does (operator 2026-11-04). A bot's line is
+// not opened by a bare tool use. Any turn's first real text opens it, under the final reply's gate (operator 2026-11-11).
+const opensOnTool = (d) => !!d.emoji && (!d.quiet || !!d.unaddressed);
 // Text that is still only a polite silence, or the start of one ('.', '..'), opens nothing: a silence stays unseen.
 const silentSoFar = (t) => isSilenceReply(t) || isSilenceReply(`${String(t ?? '').trim()}...`);
 
@@ -162,7 +162,7 @@ export function createSpine({
   guard = null,                        // optional §2c stop-guard: the per-channel loop-breaker + RESUME (createStopGuard, boot-wired). Null = pipe runs unguarded (tests).
   stopSwitch = null,                   // optional §2c KILL SWITCH (boot-wired): { present(): does EGPT_HOME/STOP exist, async pull(why): warn in why.chatId (capped, best-effort) + write the file + take the SERVICE down }. Two call sites, both on paths that already exist — tick() (the operator touched the file; no chatId, so nothing to warn) and classify() (the chat safe word, which carries its chat). Null = no kill switch (tests).
   stopPhrase = () => STOP_PHRASE,      // () => the kill phrase (boot: config stop_phrase; unset → STOP_PHRASE, '' → off)
-  isSelfChat = () => false,            // (ev) => is this message in THE SELF CHAT — the operator's own command channel (boot: networks.whatsapp.chat_ids[0]). The ONLY chat the safe word is honoured in (operator 2026-07-26). Default false = FAIL-CLOSED: an un-wired spine has no chat kill switch at all, which is the safe direction for a switch that takes the service down.
+  isSelfChat = () => false,            // (ev) => is this message in THE SELF CHAT — the operator's own command channel (boot: networks.whatsapp.admin_chat_ids[0]). The ONLY chat the safe word is honoured in (operator 2026-07-26). Default false = FAIL-CLOSED: an un-wired spine has no chat kill switch at all, which is the safe direction for a switch that takes the service down.
   // A RELAY CHANNEL IS TRANSIT, NOT A CONVERSATION (operator 2026-08-31: "when a message arrived
   // to a 'egpt-mesh-*' channel, it must be treated as a transit message. the log if required is in
   // beeper itself"). OPTIONAL (ev) => boolean, boot-wired to src/spine/node-names.mjs's
@@ -180,6 +180,7 @@ export function createSpine({
   backgroundOutcome = null,            // optional ({ being, chatId, taskId }) => { status, message } | null — how a finished background task ended, as its session's CLI said it (boot: the pool's); the chat's status marks it. Null ⇒ not known (◦)
   background = null,                   // optional registry (src/spine/background.mjs): pending voice notes at the ingestion point, agents mirrored on the tick
   beeperUpdate = null,                 // optional (src/tools/beeper-update.mjs): its 6-hourly Beeper check rides the tick
+  egptUpdate = null,                   // optional (src/tools/egpt-update.mjs): its 6-hourly look at the checkout's upstream rides the tick
   sandboxPins = null,                  // optional (src/spine/sandbox-pins.mjs): releasing pins whose conversations.yaml sandbox_pin is gone rides the tick
   warmPool = null,                     // optional (src/warm-sessions.mjs): its memory-pressure eviction rides the tick
   remindClosed = null,                 // optional (ev) => Promise — closed_chats' reminder (src/spine/closed-chats.mjs remind)
@@ -190,6 +191,10 @@ export function createSpine({
   // rather than re-derived: one resolver, so this can never read a different chat's file.
   // Null (every existing pipe path) = the option cannot engage — byte-identical to before.
   readTranscript = null,
+  // ONE ACCUM FROM A CHAT AND ITS SI+ SIDE GROUP (operator 2026-11-20) — `(chatId, {chatName, network, being}) =>
+  // Promise<string|null>`: the text mode:accum reads when the chat has a side group (src/spine/accum.mjs; their
+  // transcripts joined in time order), null when it has none. Null / absent = readTranscript's text, as before.
+  readAccum = null,
   // CONFIG REFRESH ON MESSAGE ARRIVAL (2026-08, replacing the old tick-based hot reload):
   // optional () => Promise<void>, called at the top of handleFast for every inbound message —
   // boot.mjs wires it to re-scan the config resolver + reload the heartbeat set (see
@@ -481,7 +486,7 @@ export function createSpine({
     const at = d.replyChatId ?? null;                 // the chat's automatic SI+ group (see openAndRunReply)
     const replyTo = at ? null : (ev.msgId ?? null);   // quote UNIFORMLY — including auto (see openAndRunReply)
     const ahead = bumpTrain(turnKey);
-    const out = sender.open(at ?? ev.chatId, { being: to, replyTo, auto: true, origin: at ? null : ev.chatId, canary: tunnelCanary(d, to, ev) });
+    const out = sender.open(at ?? ev.chatId, { being: to, replyTo, auto: true, origin: at ? null : ev.chatId });
     // `trigger` (operator 2026-09-11) — the handle-stripped dispatch line of the message that
     // armed this dwell. It is the BASE only when the drained cycle came back empty (a burst with
     // lines prompts with those verbatim), and each of those lines was already stripped on its way
@@ -927,7 +932,7 @@ export function createSpine({
       // case insensitive"). It used to fire from ANY chat on ANY surface — one stray "stop"
       // in a group, or anyone with the operator console, took the whole service down. Now
       // the word is scoped to the ONE chat that is the operator addressing his own node:
-      // isSelfChat (boot: networks.whatsapp.chat_ids[0], the same Self-DM the restart
+      // isSelfChat (boot: networks.whatsapp.admin_chat_ids[0], the same Self-DM the restart
       // announce posts to). ANYWHERE ELSE — another Beeper chat, a group, the shell console
       // (which hardcodes authorized:true, so scoping is what actually closes it) — "stop" is
       // ORDINARY TEXT and flows on to the normal dispatch.
@@ -1431,8 +1436,6 @@ export function createSpine({
   // A turn's later outputs (voice, limbs) go where its reply went: the side group, made now if the reply
   // did not make it, else ev's chat. null = the side group could not be made.
   const replyChatOf = async (d, ev) => (typeof d.replyChatId === 'function' ? (await d.replyChatId()) || null : (d.replyChatId ?? ev.chatId));
-  // A reply tunnelled into the chat's open /split names where it came from in its frames; the split's record says so (identity.mjs).
-  const tunnelCanary = (d, to, ev) => (d.tunnel ? { group: d.replyChatId, origin: ev.chatId, kind: 'tunnel', speaker: `${labelOf(to)} from [${ev.chatName || ev.chatId}]` } : null);
 
   // Open THIS mention's placeholder + enqueue its reply turn on the per-conversation FIFO.
   // Returns the turn's completion promise.
@@ -1453,18 +1456,18 @@ export function createSpine({
     const ahead = bumpTrain(turnKey);
     // replyIn null: replyTo is this chat's own id — a local mouth quotes its own copy (sender quoteIn).
     // ambient: an 'on' turn on a non-human line opens no ⏳ — a silence then posts nothing. A human's
-    // opens at arrival when it addresses the being, else it is quiet (operator 2026-11-02). A quiet turn (a bot's line, dispatch.bot_quiet; a tunnelled one) is
+    // opens at arrival when it addresses the being, else it is quiet (operator 2026-11-02). A quiet turn (a bot's line, dispatch.bot_quiet) is
     // ambient in any mode and never opens before it ends: no timer, tool use or partial opens it (operator 2026-10-31).
     // So is every turn with the emoji train (2026-11-03).
     const ambient = whole(d) || (d.mode === 'on' && !humanTurn(ev));
-    const out = sender.open(at ?? ev.chatId, { being: to, replyTo, replyIn: null, replyKey: { msgKey: ev.msgHash, timestamp: ev.msgTs }, queued: ahead > 0, queuedAhead: ahead, auto: d.mode === 'auto', ambient, hideSilence: d.mode === 'on', origin: at ? null : ev.chatId, canary: tunnelCanary(d, to, ev) });
+    const out = sender.open(at ?? ev.chatId, { being: to, replyTo, replyIn: null, replyKey: { msgKey: ev.msgHash, timestamp: ev.msgTs }, queued: ahead > 0, queuedAhead: ahead, auto: d.mode === 'auto', ambient, hideSilence: d.mode === 'on', origin: at ? null : ev.chatId });
     const marks = markOf(to, d, ev);
     return turnBy(turnKey, () => runReplyTurn({ to, ev, d, out, replyTo, turnKey, queued: ahead > 0, pinned, trigger, ambient, marks }));
   }
 
   // THE MARK ON THE LINE A TURN ANSWERS, placed at arrival (turns.receipt). The emoji train (2026-11-03):
   // 👾 → 🤔 → off on a human's line. Else dd2c11b7's ✍️ on a human's unaddressed 'on' line. Not where the
-  // reply goes elsewhere (side group, tunnel), nor on a reaction: its msgId is the message reacted to.
+  // reply goes elsewhere (side group), nor on a reaction: its msgId is the message reacted to.
   // …and whether this chat can carry it at all (turns.canMark: the mouth's room, or the being's own
   // account), the fact gating.decide sets `emoji` on. Not: the turn runs as bubble does.
   const marksHere = (to, ev) => () => turns.canMark?.(to, ev) ?? false;
@@ -1592,11 +1595,22 @@ export function createSpine({
       if (readTranscript && (d.mode === 'accum' || ev.replyToId != null)) {
         try {
           const text = await readTranscript(ev.chatId, { chatName: ev.chatName, network: ev.surface });
-          if (text && d.mode === 'accum') {
-            // BOTH of this being's labels: the NAME its lines carry since 2026-08-28 and the map
-            // KEY every older line carries. transcript.md is append-only, so a live file holds
-            // both and either one is a valid boundary (transcript-log.beingReplyRe).
-            const got = contextSinceLastTurn(text, { being: [labelOf(to), to], maxChars: RECENT_CONTEXT_MAX_CHARS, exclude: ev.line ?? ev.body });
+          // BOTH of this being's labels: the NAME its lines carry since 2026-08-28 and the map
+          // KEY every older line carries. transcript.md is append-only, so a live file holds
+          // both and either one is a valid boundary (transcript-log.beingReplyRe).
+          const labels = [labelOf(to), to];
+          // A chat and its SI+ side group are one conversation in two groups (operator 2026-11-20: "E's
+          // accum should grow from original group and the side group; it's a same thread but replying in
+          // other group"): a turn woken in either reads both transcripts, so its boundary — its last
+          // reply, logged in whichever group woke that turn — and everything said since are found in
+          // the joined text. A /split or a /join room has none to join: its own file, as ever.
+          let said = text;
+          if (d.mode === 'accum' && readAccum) {
+            try { said = (await readAccum(ev.chatId, { chatName: ev.chatName, network: ev.surface, being: labels })) ?? text; }
+            catch (e) { note(`accum ${to}/${ev.chatId}: ${e?.message ?? e}`); }   // a file unreadable: this chat's own
+          }
+          if (said && d.mode === 'accum') {
+            const got = contextSinceLastTurn(said, { being: labels, maxChars: RECENT_CONTEXT_MAX_CHARS, exclude: ev.line ?? ev.body });
             if (got.blocks.length) recent = got;
           }
           if (text && ev.replyToId != null) {
@@ -1678,7 +1692,7 @@ export function createSpine({
         const raw = typeof partial === 'string' ? partial : (partial?.text ?? '');
         transcript.logStream?.(ev, streamed, raw, { being: to });
         streamed = raw;
-        // A silence so far: recorded, not shown. Any other text opens the bubble, a bot's line and a tunnel too.
+        // A silence so far: recorded, not shown. Any other text opens the bubble, a bot's line too.
         if (whole(d) && !working) return silentSoFar(prose(raw)) ? undefined : open(partial);
         return show(partial);
       };
@@ -1811,11 +1825,10 @@ export function createSpine({
       if (parsed && hadActions) {
         try {
           // A reply routed to the side group takes its limbs there too: none acts in the origin.
-          // A tunnelled one's sends carry the reply's canary (tunnelCanary).
           const at = await replyChatOf(d, ev);
           if (!at) throw new Error('its side group could not be made — no limb run');
           const limbEv = at === ev.chatId ? ev : { ...ev, chatId: at };
-          const { ran = [] } = (await actions.execute(parsed.run, parsed.stripped, limbEv, { being: to, canary: tunnelCanary(d, to, ev) })) ?? {};
+          const { ran = [] } = (await actions.execute(parsed.run, parsed.stripped, limbEv, { being: to })) ?? {};
           for (const a of ran) await transcript.logAction?.(ev, a, { being: to });
         } catch (e) { note(`actions ${to}/${ev.chatId}: ${e?.message ?? e}`); }
       }
@@ -1848,6 +1861,7 @@ export function createSpine({
     liveness.tick();
     background?.sync();
     beeperUpdate?.tick(clock.now());
+    egptUpdate?.tick(clock.now());
     sandboxPins?.tick(clock.now());
     ingestAsk?.tick?.(clock.now());
     warmPool?.tick();

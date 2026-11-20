@@ -1204,12 +1204,28 @@ export const CONFIG_SCHEMA = {
           manual  checks at boot, every 6 h and on /<handle> update beeper; ONE
                   line per newly downloaded version to log_to_group; installs
                   only on /<handle> update beeper (operator only).
-          auto    as manual, then installs by itself at the next quiet moment.
+          auto    as manual, then installs by itself at the next quiet moment
+                  (an update Beeper has not downloaded itself is fetched first).
         Installing is a controlled Beeper restart: it waits for turns like
         /restart, eGPT stays up, the result is one line in log_to_group.
-        DEFAULT: windows manual. linux / mac: accepted, not implemented yet —
-        treated as none (one log line at boot). Not a connection. beeper: is a
-        restart-only key, so a change applies at the next restart.
+        DEFAULT: auto on every OS (windows, linux, mac).
+        mac: the feed's zip for this Mac's architecture is unpacked beside
+        Beeper Desktop.app (/Applications, else ~/Applications), the Beeper
+        processes are quit, the bundle is swapped in and they are opened again
+        with the flags they had. macOS 13+ guards app bundles: the process that
+        runs eGPT needs App Management (System Settings → Privacy & Security →
+        App Management); without it the update is refused with that remedy,
+        once per version, before anything quits. Not yet run on a real Mac.
+        linux (the docker node): the feed's AppImage is unpacked onto the volume
+        as $EGPT_HOME/beeper/<version>/ (the newest two stay), then the Beeper
+        processes are killed and the entrypoint relaunches the newest. That needs
+        an image whose entrypoint launches Beeper from the volume: rebuild it
+        once (docker/aws/build-push.sh); until then the update is refused with
+        that remedy, once per version. Beeper downloads nothing itself there, so
+        there is no "downloaded" notice: manual = install on /<handle> update
+        beeper. Not a connection. beeper: is a restart-only key, so a change
+        applies at the next restart.
+        eGPT's own update method is the top-level auto_update.egpt (auto_update).
 
     THE PORT IS DISCOVERED — there is none to configure (operator 2026-09-07).
     Beeper Desktop's local API binds the FIRST FREE PORT starting at 23373, so
@@ -1270,7 +1286,7 @@ export const CONFIG_SCHEMA = {
     that chat at all. So every outbound this node places — an agent's reply and
     the node's own announces alike — rides the mouth when the mouth can reach
     the chat, and otherwise the connection that holds it (the one it arrived on,
-    or the ear for this node's own networks.<surface>.chat_ids). One rule, no
+    or the ear for this node's own networks.<surface>.admin_chat_ids). One rule, no
     exception for node-level sends. beeper.use is therefore an OPTIONAL override
     of the default mouth, never a requirement: with it absent the names decide,
     and no chat becomes unreachable either way.
@@ -1635,9 +1651,13 @@ export const CONFIG_SCHEMA = {
 
     SHAPE:
       whatsapp | telegram | signal:
-        chat_ids
+        admin_chat_ids
           STABLE command-channel ids — chats that accept /agents, /restart, … ; a
-          LIST; a node may own several.
+          LIST; a node may own several. The FIRST admin chat of whatsapp (the
+          Self-DM), else of telegram, else of any other surface, gets the
+          lifecycle lines: "↻ /restart… (pid)" going down, "✅ egpt back up!" /
+          "✅ egpt started" at boot (src/spine/boot.mjs announceChatId). Named
+          chat_ids until 2026-11-03.
         allowed_users
           OPTIONAL. This surface's owners — STABLE sender ids that may command
           this node on THIS surface, and whom a being answers here — jids /
@@ -1647,11 +1667,13 @@ export const CONFIG_SCHEMA = {
           account owner is always allowed.
 
     Ids are per-surface NAMESPACES (a WhatsApp jid authorizes nothing on
-    Telegram). ONE resolver reads this (src/spine/router.mjs ownersOf).
+    Telegram). ONE resolver reads each key (src/spine/router.mjs ownersOf,
+    adminChatIdsOf).
 
-    BACK-COMPAT: the OLD top-level whatsapp: / telegram: / signal: blocks plus a
+    BACK-COMPAT: the pre-rename chat_ids is still read where admin_chat_ids is
+    absent, and the OLD top-level whatsapp: / telegram: / signal: blocks plus a
     SINGULAR chat_id are still accepted (a singular chat_id normalizes to a
-    1-element chat_ids). Prefer networks: when present.
+    1-element list). Prefer networks: when present.
   `,
 
   echo: `
@@ -2241,8 +2263,9 @@ export const CONFIG_SCHEMA = {
         (edw-marketer): the person in its chat sees only its reply text - no
         "⏳ Thinking…" placeholder, no persona prefix, no visible signature
         (the invisible node frame stays), no error line. A failed or empty
-        turn is noticed in admin_channel instead (src/spine/sender.mjs plain
-        branch, src/bridges/persona-wrap.mjs).
+        turn is noticed in log_to_group instead (admin_channel when that is
+        unset; 2026-11-20; src/spine/sender.mjs plain branch,
+        src/bridges/persona-wrap.mjs).
       mode
         OPTIONAL (operator 2026-07-25) — THIS agent's own default reply-mode.
         ENUM: on | auto | mute | mention-direct | mention | accum | off
@@ -3336,15 +3359,17 @@ export const CONFIG_SCHEMA = {
 
     WHERE IT WORKS: **THE SELF CHAT ONLY** (operator 2026-07-26: "is must be a
     single word message in Self, 'stop', case insensitive") — that is
-    networks.<surface>.chat_ids[0] on whatsapp, the same Self-DM the restart
-    announce posts to. It used to fire from ANY chat on ANY surface, which made one
+    networks.whatsapp.admin_chat_ids[0], the same Self-DM the restart announce
+    posts to (the announce falls back to telegram's first admin chat; the safe
+    word does not). It used to fire from ANY chat on ANY surface, which made one
     stray "stop" in a group — or anyone at the operator console, which is
     unconditionally authorized — enough to take the node down. In every OTHER chat,
     group, and on the shell surface, "stop" is now ordinary text. No Self chat
     configured → the chat safe word is simply unavailable (fail-closed); the STOP
-    file is still the way out. The other admin chats (chat_ids[1..]) and every
-    group take stop_phrase instead (operator 2026-10-18, superseding 0a2fc04's
-    2026-10-15 widening of the bare word to every chat_ids entry).
+    file is still the way out. The other admin chats (admin_chat_ids[1..], and
+    every other surface's) and every group take stop_phrase instead (operator
+    2026-10-18, superseding 0a2fc04's 2026-10-15 widening of the bare word to
+    every chat_ids entry).
 
     WHAT COUNTS AS THE WORD: the WHOLE trimmed message, case-insensitive, trailing
     '.'/'!' tolerated. "stop it", "please stop", "stopping" are ordinary text.
@@ -3499,6 +3524,42 @@ export const CONFIG_SCHEMA = {
     captures the new content as its boot hash.
     Only operator-triggered writes touch config.yaml (/config set, /radio
     disable); nothing automatic does, so there is no restart loop.
+  `,
+
+  auto_update: `
+    Keeping eGPT itself current (src/tools/egpt-update.mjs), beside the Beeper
+    check. At boot and every 6 h the node fetches its checkout's upstream (the
+    current branch's own: what /upgrade's git pull --ff-only takes) and, with new
+    commits, posts ONE line per upstream sha to log_to_group. Read at each look,
+    so an edit applies without a restart. Beeper's own method is NOT here: it
+    stays in limbs.beeper.auto_update.<os>.method (see beeper).
+
+    KEYS:
+      egpt
+        ENUM: auto | manual | none          DEFAULT: auto
+          none    no fetch, no notice.
+          manual  the notice only; the operator sends /<handle> upgrade full.
+          auto    the notice, then /upgrade full by itself at the next quiet
+                  moment: the existing drain (turns in flight finish, a Beeper
+                  update under way finishes first), the daemon renewed too.
+                  ONCE per upstream sha, persisted before the exit
+                  (state/egpt-update.json): a pull that leaves the checkout behind
+                  (a dirty tree, a conflict) is not retried until the upstream
+                  moves, so it never loops the node. Not while a restart is pending.
+                  Only where a daemon respawns the spine (EGPT_SUPERVISED=1): a
+                  spine run by hand would only stop, so there auto is manual.
+        A checkout AHEAD of its upstream (diverged: ff-only would fail) gets the
+        notice with that said, and no auto. No upstream, a detached HEAD, or a
+        failed fetch: a daemon-log line, nothing posted.
+      ask_on_boot
+        ENUM: true | false                  DEFAULT: true
+        When something is pending at boot (eGPT commits and/or a Beeper update),
+        ONE follow-up line after "✅ egpt back up!" / "✅ egpt started" (the same
+        chat(s)): what is pending, the command to type for each, "Apply now?".
+        Under auto, the item says it applies at the next quiet moment instead.
+        Nothing pending: no line. The fetch never delays the back-up line.
+    EGPT_SELF_UPDATE=off in the spine's environment: neither this check nor
+    Beeper's exists (the test suite sets it, so no test touches the host).
   `,
 
   media_flood: `
@@ -3662,14 +3723,22 @@ export const CONFIG_SCHEMA = {
   admin_channel: `
     The node's admin channel (operator 2026-09-24: "make it's posted on admin
     channel, eGPT Admin. BTW the 'admin channel' must be defined in config.yaml")
-    - the ONE chat this node posts its own notices to. Today that is the
-    compaction notice: "🗜️ <node> · <being> in <chat> compacted its context
-    (was Nk tokens)...", said after a /compact that succeeded
-    (src/spine/compaction.mjs, boot.mjs noticeToAdmin). Every node may name the
+    - the ONE chat this node posts its own notices to. Since 2026-11-20 that is
+    the browser CONTROL link (/<handle> browser sends it here, never into the
+    chat it was typed in; unset: that form is refused), the captcha notice
+    (captcha_channel, below) and the output of a silent: heartbeat. It is
+    where the operator types commands, so it is kept clean: the LOG-type notices
+    - the compaction notice ("🗜️ <node> · <being> in <chat> compacted its
+    context (was Nk tokens)...", said after a /compact that succeeded,
+    src/spine/compaction.mjs, boot.mjs noticeToAdmin) and a public being's
+    error line - go to log_to_group (eGPT Logs) when it is set (operator An,
+    2026-11-20: "please put eGPT Logs in its channel, so eGPT Admin stays
+    clean"), and only fall back here when it is not. Every node may name the
     same chat; the line says which node it came from.
 
     VALUE: a chat NAME or a raw Beeper room id in SHORT form, exactly like
-    advice_channel. A name is resolved to its room by the bridge's own
+    advice_channel, or a Telegram chat id: tg:<chat>, a topic tg:<chat>/<topic>
+    (a bot cannot look a Telegram chat up by name). A name is resolved to its room by the bridge's own
     resolveChatId before the line is said, so the being's mouth can say it in
     its own room. Unset (or empty): nothing is posted, the notice stays in the
     daemon log. Operator alerts are NOT sent here; they stay on the Self chat.
@@ -3685,8 +3754,23 @@ export const CONFIG_SCHEMA = {
     <outcome> is appended only where a silent/side-effecting handler returns one
     (today: /end); every other command is just its invocation line.
 
-    VALUE: a chat NAME or a raw Beeper room id in SHORT form, resolved to its room
-    EXACTLY like admin_channel — the SAME boot.mjs resolver + poster (noticeToChannel),
+    The lifecycle lines go here too (2026-11-03): "↻ /restart|/upgrade|/rewind…"
+    before the exit, "✅ egpt back up! (sha → sha) pids — /upgrade: <what it did>"
+    and "✅ egpt started", besides the first admin chat (networks.<surface>.
+    admin_chat_ids); said once when that is this same chat.
+
+    The node's other LOG-type notices go here too (operator An, 2026-11-20:
+    "please put eGPT Logs in its channel, so eGPT Admin stays clean" ... "configure
+    log_channel it's in config.yaml" - this key is that channel): the compaction
+    notice (the pre-compaction warning and the "compacted" confirmation) and a
+    public being's error line (agents.<name>.public). With log_to_group unset they
+    stay in admin_channel, so a node without a log channel loses nothing. The browser
+    control links, the captcha notice and a silent: heartbeat's output stay in
+    admin_channel.
+
+    VALUE: a chat NAME or a raw Beeper room id in SHORT form, or a Telegram id
+    (tg:<chat>[/<topic>], a topic included), resolved to its room EXACTLY like
+    admin_channel — the SAME boot.mjs resolver + poster (noticeToChannel),
     fail-closed, said from the being's own mouth. It MAY name the same chat as
     admin_channel or a different one. Unset (or empty): auditing is OFF — nothing is
     posted and no command's behavior changes (src/spine/commands.mjs run() chokepoint,
@@ -3839,12 +3923,11 @@ export const CONFIG_SCHEMA = {
     split invites Rodz alone; no secondary → just that person. "invite" (2026-10-31) also invites every
     member of the chat ("/e split invite fabio" in a 1:1 with Fabio: Rodz + Fabio). In the split,
     anyone may call the being it was typed to (its allowed_users there: ['*']; not for access_level all).
-    THE TUNNEL (2026-10-31): while the chat has an open split, a being called in the chat answers on the
-    chat's own thread and rules, but its reply is posted in the split (the most recent one), by its
-    mouth; nothing goes into the chat. The split records it as that being's ("E from [<chat>]"), so the
-    split's own being reads it as the original's, not its own. "/<handle> end" in the split closes it
-    and replies come back to the chat; an open split wins over reply_in_side_group. Not a Telegram topic.
-    Only a split whose tunnel (below) resolves true does this.
+    A split is ANOTHER THREAD (operator 2026-11-20: "split is another thread in the same folder,
+    another group; separate accum"): its replies stay in the split and its own accum reads its own
+    transcript; the chat's being answers in the chat. The 2026-10-31 tunnel, which posted a chat's
+    replies into its open split signed "E from [<chat>]", is gone: split.tunnel (config.yaml) and a
+    conversations.yaml entry's split: { tunnel } are ignored (the boot says so once); delete them.
     The two accounts' phones come from
     beeper.primary.phone / beeper.secondary.phone. On Telegram (2026-10-25) it is a TOPIC of the
     group, tg:<chat>/<thread>, which everyone in the group can open: the group needs Topics on and the
@@ -3862,8 +3945,6 @@ export const CONFIG_SCHEMA = {
                    A template: {group} = the parent chat's title, {handle} = the handle the command
                    was typed to. Unset → a small built-in
                    default.
-      tunnel:      true|false (2026-11-01): does a split take its parent's replies. Its own conversations.yaml
-                   entry's split: { tunnel } wins over this config.yaml split.tunnel; neither set → false.
 
     ALIASES (operator 2026-10-19) — config/commands_alias.yaml, not a config.yaml key (skeleton:
     config/skeletons/commands_alias.yaml). A map of alias → "/<handle> <command> [args]", for ANY
@@ -3945,6 +4026,12 @@ export const CONFIG_SCHEMA = {
     configuring (2026-10-19). Both nodes making one at
     once is fine: two groups, each node links the other's, and each keeps replying in the first it
     holds (its own); a line in either reaches both, as an alias of the chat.
+
+    ONE ACCUM (operator 2026-11-20: "E's accum should grow from original group and the side group; it's
+    a same thread but replying in other group"): a turn woken in the chat or in its side group, in mode
+    accum, is prompted with the lines of BOTH transcripts (transcript.md and transcript-SI+<name>.md)
+    since the being's last turn, in time order, each under its own group's name. A /split is another
+    thread and a /join room (made before 2026-10-25) keeps its own log: each reads only its own.
   `,
 
   aliases: `
@@ -3982,7 +4069,7 @@ export const CONFIG_SCHEMA = {
         DEFAULT: 0.03 (operator 2026-10-08). The WARN threshold sits this fraction
         of the window BELOW ratio: warn_threshold = (ratio - warn_gap) of the
         window, clamped at >= 0. At the warn threshold the being writes its handoff
-        and the admin channel gets the pre-compaction notice (compaction_warn_notice,
+        and the log channel gets the pre-compaction notice (compaction_warn_notice,
         a top-level key), ONCE per thread; at ratio the actual /compact runs. So the
         operator is warned and the handoff exists ~warn_gap of the window before the
         context compacts. Per-being/room overridable, same place as ratio. A
@@ -4042,7 +4129,9 @@ export const CONFIG_SCHEMA = {
   `,
 
   compaction_warn_notice: `
-    The PRE-COMPACTION notice posted to the admin channel at the WARN threshold
+    The PRE-COMPACTION notice posted to the log channel (log_to_group; admin_channel
+    when that is unset - operator An, 2026-11-20: "please put eGPT Logs in its
+    channel, so eGPT Admin stays clean") at the WARN threshold
     (compaction.warn_gap below compaction.ratio), operator 2026-10-08 — the PRIMARY
     compaction notice now, said a few % before the context compacts so the operator
     is warned AND the handoff already exists. The node still prefixes its own
@@ -4059,6 +4148,6 @@ export const CONFIG_SCHEMA = {
     DEFAULT: unset — the operator's reference wording is used:
     "the conversation is at {percent}%, handoff being written, compaction next. you
     can read the handoff here: {path}". A blank/whitespace string SKIPS the notice
-    (same degrade as handoff_prompt / welcome); no admin_channel sink also skips it.
+    (same degrade as handoff_prompt / welcome); neither log_to_group nor admin_channel set also skips it.
   `,
 };

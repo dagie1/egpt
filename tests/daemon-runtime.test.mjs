@@ -10,6 +10,7 @@ import {
   RESTART_MAX_MS,
   REWIND_EXIT_CODE,
   UPGRADE_EXIT_CODE,
+  UPGRADE_FULL_EXIT_CODE,
   createDaemonRuntime,
   resolveProfiles,
   startProfileDaemons,
@@ -361,6 +362,47 @@ describe('daemon runtime fake-world harness', () => {
     expect(children).toHaveLength(2);
   });
 
+  // What /upgrade did joins the sidecar the going-down spine wrote; boot's back-up line says it
+  // (operator 2026-11-03: "nothing happened… or you didn't show updates").
+  describe('the /upgrade outcome joins the restart-announce sidecar', () => {
+    const SPINE_SIDECAR = { chatId: 'tg:-1000000000104/3', kind: '/upgrade', preSha: 'oldsha', pid: 7 };
+    const upgradeWith = async ({ shas, pull = { status: 0 }, sidecar = SPINE_SIDECAR }) => {
+      const writes = [];
+      const base = makeSpawnSync({ shas });
+      const spawnSync = (cmd, args = [], opts = {}) => {
+        if (cmd === 'git' && args[0] === 'pull') { base.calls.push({ cmd, args, opts }); return { stdout: Buffer.from(''), stderr: Buffer.from(''), ...pull }; }
+        if (cmd === 'git' && args[0] === 'rev-list') return { status: 0, stdout: Buffer.from('3\n') };
+        return base(cmd, args, opts);
+      };
+      const { runtime, children } = makeRuntime({
+        spawnSync,
+        readFileSync: (p) => { if (sidecar && String(p).includes('restart-announce.json')) return JSON.stringify(sidecar); const e = new Error('missing'); e.code = 'ENOENT'; throw e; },
+        writeFileSync: (p, body) => writes.push({ p: String(p), body: String(body) }),
+      });
+      runtime.spawnShell();
+      await children[0].child.handlers.exit(UPGRADE_EXIT_CODE, null);
+      expect(children).toHaveLength(2);
+      return writes.filter((w) => w.p.includes('restart-announce.json')).map((w) => JSON.parse(w.body));
+    };
+
+    it('already up to date', async () => {
+      expect(await upgradeWith({ shas: ['oldsha'] })).toEqual([{ ...SPINE_SIDECAR, outcome: 'already up to date' }]);
+    });
+
+    it('pulled: the commit count and npm install', async () => {
+      expect(await upgradeWith({ shas: ['oldsha', 'newsha'] })).toEqual([{ ...SPINE_SIDECAR, outcome: 'pulled 3 commits, npm install ok' }]);
+    });
+
+    it('the pull failed: git\'s reason and the sha it stays on', async () => {
+      const pull = { status: 128, stderr: Buffer.from('fatal: Not possible to fast-forward, aborting.\n') };
+      expect(await upgradeWith({ shas: ['oldsha'], pull })).toEqual([{ ...SPINE_SIDECAR, outcome: 'git pull failed (fatal: Not possible to fast-forward, aborting.), still on oldsha' }]);
+    });
+
+    it('no sidecar from the spine: nothing is written', async () => {
+      expect(await upgradeWith({ shas: ['oldsha'], sidecar: null })).toEqual([]);
+    });
+  });
+
   // === restart-announce sidecar — the daemon writes a fallback marker for the two exit
   // paths where the dying spine never got a chance to write its own (announceAndExit's
   // graceful path is untouched/out of scope): a genuine crash, and a wedge-kill. Same
@@ -459,6 +501,33 @@ describe('daemon runtime fake-world harness', () => {
       expect(timers).toHaveLength(1);
       timers[0].fn();
       expect(children).toHaveLength(2);   // respawn still proceeds despite the resolution failure
+    });
+
+    // admin_chat_ids (operator 2026-11-03: "put An in chat_ids, btw it should be called
+    // admin_chat_ids"): the crash sidecar names the same chat boot's announceChatId does.
+    const crashChatId = async (yaml) => {
+      const writes = [];
+      const { runtime, children } = makeRuntime({
+        readFileSync: (p) => { if (String(p).includes('config.yaml')) return yaml; const e = new Error('missing'); e.code = 'ENOENT'; throw e; },
+        writeFileSync: (p, body) => writes.push({ p: String(p), body: String(body) }),
+      });
+      runtime.spawnShell();
+      await children[0].child.handlers.exit(1, null);
+      const w = writes.find((x) => x.p.includes('restart-announce.json'));
+      return w ? JSON.parse(w.body).chatId : null;
+    };
+
+    it('no whatsapp admin chat: the crash sidecar names the first telegram admin chat (nu)', async () => {
+      expect(await crashChatId('networks:\n  whatsapp:\n    admin_chat_ids: []\n  telegram:\n    admin_chat_ids:\n      - "tg:-1000000000104/3"\n')).toBe('tg:-1000000000104/3');
+    });
+
+    it('a whatsapp admin chat still wins over telegram', async () => {
+      expect(await crashChatId('networks:\n  whatsapp:\n    admin_chat_ids: ["!self:beeper.com"]\n  telegram:\n    admin_chat_ids: ["tg:-1000000000104/3"]\n')).toBe('!self:beeper.com');
+    });
+
+    it('admin_chat_ids is preferred over the legacy chat_ids; a legacy telegram chat_ids is still read', async () => {
+      expect(await crashChatId('networks:\n  whatsapp:\n    admin_chat_ids: ["!new:beeper.com"]\n    chat_ids: ["!old:beeper.com"]\n')).toBe('!new:beeper.com');
+      expect(await crashChatId('networks:\n  whatsapp:\n    chat_ids: []\n  telegram:\n    chat_ids: ["tg:-1000000000104/3"]\n')).toBe('tg:-1000000000104/3');
     });
   });
 });
@@ -1961,5 +2030,71 @@ describe('the S1 daemon holds the claude sessions', () => {
     expect(await ended(1)).toBe(0);
     expect(await ended(REWIND_EXIT_CODE)).toBe(1);
     expect(await ended(45)).toBe(0);
+  });
+});
+
+// /upgrade full (exit 46): the pull, then the daemon itself leaves, for its supervisor to respawn it on
+// the new code. Only where something does respawn it, and never for one profile of a shared process.
+describe('/upgrade full renews the daemon', () => {
+  const SIDECAR = { chatId: 'tg:-1000000000104/3', kind: '/upgrade full', preSha: 'oldsha', pid: 7 };
+  const world = (extra = {}) => {
+    const seen = [];
+    let sidecar = { ...SIDECAR };
+    const timers = [];
+    const h = makeRuntime({
+      session1: true,
+      spawnSync: makeSpawnSync({ shas: ['oldsha'] }),
+      createChromeHost: () => ({ sweepOrphans: () => {}, attach: () => {}, closeAll: (why) => seen.push(['closeAll', why]) }),
+      createCliHost: () => ({ attach: () => {}, endAll: (why) => seen.push(['endAll', why]) }),
+      readFileSync: (p) => { if (String(p).includes('restart-announce.json')) return JSON.stringify(sidecar); const e = new Error('missing'); e.code = 'ENOENT'; throw e; },
+      writeFileSync: (p, body) => { if (String(p).includes('restart-announce.json')) sidecar = JSON.parse(String(body)); },
+      setTimeout: (fn, ms) => timers.push({ fn, ms }),
+      ...extra,
+    });
+    h.runtime.start();
+    return { ...h, seen, timers, outcome: () => sidecar.outcome };
+  };
+
+  it('supervised: pulls, ends the sessions and the Chromes, and exits 46', async () => {
+    const { children, seen, timers, processObj, spawnSync, outcome } = world({ daemonRespawns: true });
+    await children[0].child.handlers.exit(UPGRADE_FULL_EXIT_CODE, null);
+    expect(spawnSync.calls.map((c) => [c.cmd, c.args?.[0]])).toContainEqual(['git', 'pull']);
+    expect(children).toHaveLength(1);                 // no new spine from this daemon
+    expect(seen.map(([w]) => w)).toEqual(['endAll', 'closeAll']);
+    timers.forEach((t) => t.fn());
+    expect(processObj.exits).toEqual([UPGRADE_FULL_EXIT_CODE]);
+    expect(outcome()).toBe('already up to date, daemon renewed');
+  });
+
+  it('nothing respawns it: only the spine renews, and the back-up line says so', async () => {
+    const { children, seen, processObj, outcome } = world({ daemonRespawns: false });
+    await children[0].child.handlers.exit(UPGRADE_FULL_EXIT_CODE, null);
+    expect(children).toHaveLength(2);
+    expect(seen).toEqual([]);
+    expect(processObj.exits).toEqual([]);
+    expect(outcome()).toContain('daemon NOT renewed: nothing respawns this daemon');
+  });
+
+  it('a process shared by several profiles never ends for one of them', async () => {
+    const { children, processObj, outcome } = world({ daemonRespawns: true, sharedProcess: true });
+    await children[0].child.handlers.exit(UPGRADE_FULL_EXIT_CODE, null);
+    expect(children).toHaveLength(2);
+    expect(processObj.exits).toEqual([]);
+    expect(outcome()).toContain('this process supervises other profiles too');
+  });
+
+  it('respawns is read from EGPT_DAEMON_RESPAWNS, or the container entrypoint on Linux', async () => {
+    const leaves = async (env, { platform = 'linux', entrypoint = false } = {}) => {
+      const processObj = makeProcess();
+      Object.assign(processObj.env, env);
+      const { children, timers } = world({ processObj, platform, existsSync: (p) => entrypoint && p === '/usr/local/bin/egpt-entrypoint' });
+      await children[0].child.handlers.exit(UPGRADE_FULL_EXIT_CODE, null);
+      timers.forEach((t) => t.fn());
+      return processObj.exits.includes(UPGRADE_FULL_EXIT_CODE);
+    };
+    expect(await leaves({ EGPT_DAEMON_RESPAWNS: '1' })).toBe(true);
+    expect(await leaves({}, { entrypoint: true })).toBe(true);
+    expect(await leaves({}, { platform: 'win32', entrypoint: true })).toBe(false);
+    expect(await leaves({})).toBe(false);
   });
 });

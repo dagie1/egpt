@@ -14,8 +14,9 @@ API**. You operate it from your **Self-DM** on any surface.
 ## 1. Commands (from the Self-DM)
 
 A slash command typed in an authorized chat is intercepted by the node itself,
-not answered by the persona. Authorization = the surface's own `chat_id`
-(Self-DM), an owner (the node's `conversation_defaults.allowed_users` plus
+not answered by the persona. Authorization = one of the surface's own admin
+chats (`networks.<surface>.admin_chat_ids`, e.g. the Self-DM), an owner (the
+node's `conversation_defaults.allowed_users` plus
 `networks.<surface>.allowed_users` where that surface sets one), or the account owner.
 
 `allowed_users` lists join by inheritance, never replace (2026-11-07). The Operator
@@ -132,8 +133,15 @@ conversation (folder, threads, settings, a `closed_chats` rule) follows it.
                                                the current checkout); waits for
                                                turns and background work in
                                                flight, no cap; `force` skips it
-/<handle> upgrade                              git pull + npm install + rebuild,
-                                               then respawn
+/<handle> upgrade [full]                       git pull + npm install + rebuild,
+                                               then respawn; `full` also ends the
+                                               daemon (its Chromes and sessions)
+                                               for its supervisor to respawn it:
+                                               the container does, a Windows
+                                               service is not assumed to
+                                               (the node also notices new commits
+                                               itself and, by default, runs this
+                                               `full` form at a quiet moment: `auto_update`)
 /<handle> rewind <ref>                         git checkout <ref>, reinstall,
                                                respawn
 /<handle> update beeper                        install the Beeper update this
@@ -141,6 +149,19 @@ conversation (folder, threads, settings, a `closed_chats` rule) follows it.
                                                restarts Beeper (eGPT stays up),
                                                one result line in log_to_group;
                                                else the one-line Beeper state
+/<handle> browser [group]                      this chat's (or [group]'s) browser,
+                                               opened on its own screen, and a
+                                               link: VIEW-only in the chat,
+                                               CONTROL to admin_channel (both
+                                               when typed there; refused while
+                                               admin_channel is unset). See below
+/<handle> browser all [group]                  the CONTROL link in the chat:
+                                               anyone with it drives
+/<handle> browser stop [group]                 close the link now; the browser
+                                               stays
+/<handle> browser close [group]                close the browser: its Chrome
+                                               (eGPT's or a sign-in window), its
+                                               link and its screen
 /<handle> browser refresh [group] [url]        close this chat's (or [group]'s)
                                                browser and open a normal Chrome
                                                window on its profile, to sign in
@@ -159,7 +180,10 @@ reply is prompted with everything said here since the being's own last turn) ·
 
 `accum` changes only WHAT a turn is prompted with, never WHEN one happens — it
 does not buffer, batch, or flush on a heartbeat. (The 2026-07-01 accum did; same
-word, different mechanism.)
+word, different mechanism.) A chat that replies in its `SI+` side group
+(`reply_in_side_group`) is one conversation in two groups: a turn woken in either
+is prompted with the lines of both since the being's last turn, in time order. A
+`/split` is another thread, and keeps its own.
 
 ### `/agents … access_level` — the confinement tiers
 
@@ -364,12 +388,37 @@ folder under the profiles root; any case), that group is used instead and the
 next word is the url: `/e browser refresh brain accounts.google.com`. A word with
 a dot, a slash or a scheme is always the url. An unknown word gets the usage and
 the known group names. The window opens on the desktop of the node that runs the
-being. On a container node, open its VNC (`:6080`) to see it. Sign in or pass the
+being; on a container node, on the group's own screen, and the answer carries its
+link (as `/<handle> browser`, below). Sign in or pass the
 check, then close the window. Until that window's Chrome exits, eGPT does not
 open the browser again, and a being that asks for it is told the browser is held
 for sign-in. When it exits, the chat you typed the command in gets one line:
 "browser <group> is back — signed-in session will be used". eGPT uses no stealth
 and solves no captchas. You pass the check yourself.
+
+### `/<handle> browser [all|stop|close] [group]` — see a group's browser, or share it
+
+On a container node (nu, EDW: Linux, no physical desktop) every browser group has
+its own virtual screen (`:100` and up, one per group, kept in
+`state/browser-screens.json`), and its Chrome, eGPT's or a sign-in window, opens
+there. `:99` keeps Beeper and stays the operator's. The command is the node's own,
+like `/status`: no being turn.
+
+`/<handle> browser [group]` (owners only) opens this chat's (or [group]'s) browser
+if it is not up and answers with a link to its screen through a temporary
+Cloudflare tunnel (`*.trycloudflare.com`). The chat gets the VIEW-only link; the
+CONTROL link goes to `admin_channel`, never into the chat. Typed in the admin
+channel itself, both links land there. With `admin_channel` unset the command
+says so and opens nothing. `/<handle> browser all` puts the CONTROL link in the
+chat: anyone with it can drive, together. Asking again while the link is open
+gives the same link; each new link has new passwords, so an old one is dead.
+
+The link has no time limit while someone watches. It closes 2 minutes after the
+last viewer leaves, or after 10 minutes if nobody opens it; `/<handle> browser
+stop` closes it now. `/<handle> browser close` closes the browser itself: its
+Chrome, its link and its screen; the next need starts them again. Nothing closes
+on memory. On a desktop node (Windows) the browser opens as a normal window on
+that PC and the answer says so: no screen, no link.
 
 On the machine itself, or with the node down: `setup\chrome-signin.cmd [profile]
 [url]` (default `brain`, Google sign-in). It closes the Chrome processes on that
@@ -391,14 +440,16 @@ default; commented blocks are optional overrides.
 | `emojis` | Author tags for mirroring: `user` / `egpt` / `persona` / `human`. |
 | `agents` | **Required.** The unified registry: persona, local beings, and mesh relays. Each agent = `{ configuration, personality?, handles, relay_channel? }`. `configuration` names an agent-type file (`config/agents/<type>.yaml`), an inline map, or the literal `relay`. `personality` names `config/agents/identities/<name>.md` and sits BESIDE `configuration` — a being composes a shared brain def with its own identity, no per-being type file needed; it outranks a `personality:` written inside the def, and absent both it is `egpt`. A node without an `agents` block or a persona entry (handles include `e`/`egpt`) refuses to boot. |
 | `conversation_defaults` | `allowed_users`: the Operator and the node's other owners, ids of any network mixed. They may command the node and always wake its beings; lists below the root only add. Unset or `[]` = no listed owner (the account owner always passes). |
-| `whatsapp` / `telegram` / `signal` | Per-surface auth: `{ chat_id, allowed_users }`. A surface's `allowed_users`, when set, adds to the node's `conversation_defaults.allowed_users` there (empty adds nobody). Ids are per-surface namespaces. `whatsapp` also carries the transport config (`networks: []` = the firehose). |
+| `whatsapp` / `telegram` / `signal` | Per-surface auth: `{ admin_chat_ids, allowed_users }` (under `networks:`; the pre-2026-11-03 `chat_ids` and the older singular `chat_id` are still read). `admin_chat_ids` are the chats that accept commands; the first one of whatsapp, else of telegram, gets the `/restart` / `/upgrade` lines (`↻ …` going down, `✅ egpt back up!`), and so does `log_to_group` when set (once when it is the same chat). After `/upgrade` the back-up line says what it did (`— /upgrade: already up to date` / `pulled 3 commits, npm install ok` / `git pull failed (<reason>), still on <sha>`); after `/rewind`, the ref checked out. A surface's `allowed_users`, when set, adds to the node's `conversation_defaults.allowed_users` there (empty adds nobody). Ids are per-surface namespaces. `whatsapp` also carries the transport config (`networks: []` = the firehose). |
 | `default_time_zone` | Interprets timezone-less heartbeat `when:` times (IANA name or an alias like `ET`/`PT`). |
 | `warm` | Warm sessions. Eviction is memory-based, built in: under a reserve of max(15% of memory, 500 MB), or Linux PSI > 10, idle sessions go one at a time, chatbox first, resident/system last, least recently used within. Optional: `max` (a backstop), `idle_ttl` / `idle_ttl_by_class` (timers, off by default: `15m`, `-1` = never, `0` = at turn end), `keep` (never evicted). A chat sets its own `idle_ttl` / `keep` in its folder's `config.yaml`. |
 | `loop_guard` | Both loop limits. `inbound: { turns, window }`: `turns` (6) non-human turns within `window` (2) minutes, or the same line repeated, pauses that chat until `resume`; -1 = off. `outbound`: over `messages` per `window_ms` node-wide STOPS the node. Per chat, any of three rules pauses THAT chat until `resume`: `chat_similar_count` (5) near-identical sends in `chat_similar_window_ms` (2 s); `chat_burst_count` (10) sends in `chat_burst_window_ms` (2 s); `chat_messages` (5) in each of two consecutive `chat_window_ms` (3 s). ≤0 = that rule off. |
 | `closed_chats` | `<surface>: { <chat id>: { message? } }`, ids as in conversations.yaml: no being answers there (mode `off`, applies live). `message` is posted there once (again when it changes) and to a line that names a being, at most once a day. Remove the chat to reopen it. |
 | `stop_phrase` | Kill phrase (default `EGPT STOP`): the whole message, from an allowed user, in any chat → the node writes `EGPT_HOME/STOP` and stops. `""` = off. |
 | `turn_timeout_ms` | Opt-in per-turn timeout (ms): a turn running longer fails and its session is evicted. 0/absent = no limit (default). |
-| `compaction` | After a quiet `cooling_ms`, if the warm session grew past `ratio` of the context window, native-`/compact` it in place (transcript.md keeps the full record). A compact that SUCCEEDS then arms the identity re-feed, exactly as `/agents refresh` does, so the being gets its identity back on its next turn — `/compact` rewrites the context, and the kickoff feed can be summarised out of it. A compact that fails arms nothing. |
+| `auto_update` | Keeping eGPT itself current. `egpt:` `auto` (default), `manual` or `none`: at boot and every 6 h the node fetches its checkout's upstream and, with new commits, posts ONE line per upstream sha to `log_to_group` (`⬆ nu · eGPT 3 new commits on main (b14257d3 → 1a2b3c4d): … — send /n upgrade full`). `auto` then runs `/upgrade full` by itself at the next quiet moment (turns in flight finish first, a Beeper update under way finishes first), once per upstream sha, so a pull that leaves the checkout behind never loops the node; `manual` only notices; `none` does nothing. A checkout ahead of its upstream (diverged), without one, or on a detached HEAD never upgrades by itself. `ask_on_boot:` `true` (default) or `false`: when eGPT commits and/or a Beeper update are pending at boot, one line after `✅ egpt back up!` says what and the command for each (`⬆ pending: eGPT 3 commits (b14257d3 → 1a2b3c4d) — /n upgrade full · Beeper 4.3.229 → 4.3.334 — /n update beeper. Apply now?`); under `auto` it says they apply at the next quiet moment instead. Beeper's own method stays in `limbs.beeper.auto_update.<os>.method`. Read at each look: an edit needs no restart. |
+| `log_to_group` / `admin_channel` | Two chats of the node's own (a name, short room id or `tg:<chat>[/<topic>]`; README quickstart C). `log_to_group` (eGPT Logs): one metadata-only line per command, the lifecycle lines, and the log-type notices: compaction and a public being's error (operator An, 2026-11-20: "please put eGPT Logs in its channel, so eGPT Admin stays clean"). `admin_channel` (eGPT Admin): `/browser`'s CONTROL link, the captcha notice and a `silent:` heartbeat's output; also the log-type notices while `log_to_group` is unset. |
+| `compaction` | After a quiet `cooling_ms`, if the warm session grew past `ratio` of the context window, native-`/compact` it in place (transcript.md keeps the full record). A compact that SUCCEEDS then arms the identity re-feed, exactly as `/agents refresh` does, so the being gets its identity back on its next turn — `/compact` rewrites the context, and the kickoff feed can be summarised out of it. A compact that fails arms nothing. The pre-compaction warning and the "compacted" notice go to `log_to_group` (eGPT Logs), or to `admin_channel` when that is unset (see the row above). |
 | `heartbeats` | Declarative timers — see §3. |
 | `transcription_service` | Voice-note transcription — see §4. |
 
@@ -725,7 +776,9 @@ A change of *winning* engine posts one `⚠️`/`✅` to the operator Self-DM
 ## 5. Operational notes
 
 - **The node runs the current checkout.** `/restart` boots whatever is checked
-  out — never restart with uncommitted edits mid-flight.
+  out — never restart with uncommitted edits mid-flight. The going-down and
+  back-up lines land in the first admin chat of whatsapp (the Self-DM), else of
+  telegram, else of any other surface (`networks.<surface>.admin_chat_ids`).
 - **Liveness** = the mtime of `state/alive.txt` (the alive heartbeat rewrites it
   each tick); the daemon's deadman respawns a wedged spine. The spine pid lives
   in `state/spine.pid` (singleton guard).
