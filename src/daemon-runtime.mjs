@@ -188,8 +188,8 @@ export function createDaemonRuntime(opts = {}) {
   // beating (alive process, dead loop), restart it. graceMs covers boot before
   // the first beat; staleMs ~ a couple missed beats.
   const livenessIntervalMs = opts.livenessIntervalMs ?? 30_000;
-  const aliveStaleMs = opts.aliveStaleMs ?? 150_000;
-  const aliveGraceMs = opts.aliveGraceMs ?? 90_000;
+  const aliveStaleMs = opts.aliveStaleMs ?? 300_000;   // local: 150_000 upstream; this machine boots in ~2.5-5 min
+  const aliveGraceMs = opts.aliveGraceMs ?? 600_000;   // local: 90_000 upstream
   const lastGoodUptimeMs = opts.lastGoodUptimeMs ?? LAST_GOOD_UPTIME_MS;
   let childStartedAt = 0, livenessTimer = null;
 

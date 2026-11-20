@@ -32,7 +32,11 @@ export const PERMISSIONS_DIR = fileURLToPath(new URL('../../config/permissions/'
 // so this reads the way a human should meet the tiers — 'regular' confined, 'all' unconfined,
 // 'sandbox' unconfined-but-boxed. A FOURTH tier is a file in config/permissions/ plus a name
 // here; there is no string left to hunt for.
-export const ACCESS_LEVELS = Object.freeze(['regular', 'all', 'sandbox', 'reader']);
+// LOCAL PATCH on node dg (Dagiely 2026-11-01): 'regular-plus' is regular's confinement plus a
+// few scoped Bash(<bin>:*) programs, for Queen D only — see config/permissions/regular-plus.md.
+// And (2026-11-12) 'regular-word': regular plus jword/jbajar only, for Judge D — see regular-word.md.
+// Re-applied 2026-11-19 on the November checkout (upstream added 'reader').
+export const ACCESS_LEVELS = Object.freeze(['regular', 'all', 'sandbox', 'reader', 'regular-plus', 'regular-word']);
 
 // The shared guard. Same shape as auto-mode.mjs's AUTO_MODES/isAutoMode pair, deliberately:
 // a closed set of names owned by the module that resolves them, and one predicate everyone
