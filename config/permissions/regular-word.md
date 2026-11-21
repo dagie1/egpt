@@ -28,6 +28,7 @@ dangerously_skip_permissions: false
 - Task
 - Bash(/c/Users/DAGIELY/tools/judge-d/jword:*)   # Word: read .docx/.doc, create .docx
 - Bash(/c/Users/DAGIELY/tools/judge-d/jbajar:*)  # 2026-11-12: download, ONLY into her chat's desktop/ or Desktop/Judge D
+- Bash(/c/Users/DAGIELY/tools/judge-d/jnavegador:*)  # 2026-11-21 (Dagiely): the browser, closed list of orders (tools/navegador/navegador.mjs)
 # 2026-11-12: at this tier file tools are never pre-approved (claude-args.mjs FILE_TOOLS +
 # --permission-mode default), so a bare Write is denied everywhere ("you haven't granted it
 # yet"). This SCOPED rule passes through and lets her write/edit ONLY in the desktop/ of the

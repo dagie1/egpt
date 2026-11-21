@@ -28,6 +28,8 @@ dangerously_skip_permissions: false
 - Task
 - Bash(/c/Users/DAGIELY/tools/queen-d/qbajar:*)    # download, ONLY into her media/ or Desktop/Queen D
 - Bash(/c/Users/DAGIELY/tools/queen-d/qwinget:*)   # winget with fixed options only
+- Bash(/c/Users/DAGIELY/tools/queen-d/qword:*)       # 2026-11-21 (Dagiely): read Word/Excel/PDF in her folders, create .docx (media/ + Desktop/Queen D)
+- Bash(/c/Users/DAGIELY/tools/queen-d/qnavegador:*)  # 2026-11-21 (Dagiely): the browser, closed list of orders (tools/navegador/navegador.mjs)
 # 2026-11-02: bare Bash(curl:*) and Bash(winget:*) REMOVED. Tested: `curl -o <path>` wrote
 # outside her folders, and winget has --log / export -o / configure. Q must never be able to
 # edit her own config, so only the two wrappers above (in a folder she cannot write) remain.
